@@ -9,7 +9,6 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// Record 来源记录
 type Record struct {
 	Data      []string
 	Src       string
@@ -21,7 +20,7 @@ type KeyItem struct {
 	Records []Record
 }
 
-// dedupRecords 外部匹配记录去重：来源文件+行号
+// dedupRecords 外部记录去重：来源文件名+行号
 func dedupRecords(recs []Record) []Record {
 	seen := make(map[string]bool)
 	var out []Record
@@ -71,7 +70,33 @@ func main() {
 		fmt.Printf("✅ 一共找到 %d 个待检索文档，开始预加载...\n", len(otherFiles))
 	}
 
+	// 打开待查找文档读取A1作为表头匹配标记
+	fTargetTmp, err := excelize.OpenFile(targetPath)
+	if err != nil {
+		fmt.Println("打开待查找.xlsx失败(A1读取)", err)
+		waitEnter()
+		return
+	}
+	sheetsTmp := fTargetTmp.GetSheetList()
+	if len(sheetsTmp) == 0 {
+		fmt.Println("待查找.xlsx无工作表")
+		fTargetTmp.Close()
+		waitEnter()
+		return
+	}
+	sheetTmp := sheetsTmp[0]
+	headerMarker, err := fTargetTmp.GetCellValue(sheetTmp, "A1")
+	fTargetTmp.Close()
+	if err != nil || strings.TrimSpace(headerMarker) == "" {
+		fmt.Println("❌ 待查找.xlsx A1单元格不能为空，请设置表头标记！")
+		waitEnter()
+		return
+	}
+	headerMarker = strings.TrimSpace(headerMarker)
+	fmt.Printf("✅ 使用待查找.xlsx A1作为表头标记：【%s】\n", headerMarker)
+
 	lookupMap := make(map[string][]Record)
+	var missingHeaderDocs []string // 收集：表头找不到标记的文档
 
 	for _, of := range otherFiles {
 		baseName := filepath.Base(of)
@@ -80,26 +105,64 @@ func main() {
 		fOther, err := excelize.OpenFile(of)
 		if err != nil {
 			fmt.Printf("⚠️ 跳过文件 %s，打开失败：%v\n", baseName, err)
+			missingHeaderDocs = append(missingHeaderDocs, baseName)
 			continue
 		}
 		osheets := fOther.GetSheetList()
 		if len(osheets) == 0 {
 			fOther.Close()
+			missingHeaderDocs = append(missingHeaderDocs, baseName)
 			continue
 		}
 		osheet := osheets[0]
 
-		or := 1
+		// -------- 在第1行表头寻找匹配标记的列索引 --------
+		targetSearchCol := -1
+		colScan := 1
 		for {
-			cellVal, err := fOther.GetCellValue(osheet, fmt.Sprintf("A%d", or))
+			cellH, err := fOther.GetCellValue(osheet, excelize.ColumnNumberToName(colScan)+"1")
 			if err != nil {
 				break
 			}
-			cellVal = strings.TrimSpace(cellVal)
-			if cellVal == "" {
+			cellH = strings.TrimSpace(cellH)
+			if cellH == headerMarker {
+				targetSearchCol = colScan
+				break
+			}
+			// 表头连续两个空，停止扫描表头行
+			if colScan >=2 {
+				prevVal,_ := fOther.GetCellValue(osheet,excelize.ColumnNumberToName(colScan-1)+"1")
+				if strings.TrimSpace(cellH)=="" && strings.TrimSpace(prevVal)=="" {
+					break
+				}
+			}
+			colScan++
+		}
+
+		if targetSearchCol == -1 {
+			fmt.Printf("   ⚠️ 文档 %s 第一行表头未找到标记【%s】，加入清单\n", baseName, headerMarker)
+			missingHeaderDocs = append(missingHeaderDocs, baseName)
+			fOther.Close()
+			continue
+		}
+		fmt.Printf("   ✅ 在第%d列找到表头标记，将以此列检索\n", targetSearchCol)
+
+		// 遍历数据行（从第2行开始，跳过表头）
+		or := 2
+		for {
+			searchCellVal, err := fOther.GetCellValue(osheet, excelize.ColumnNumberToName(targetSearchCol)+fmt.Sprintf("%d", or))
+			if err != nil {
+				break
+			}
+			searchCellVal = strings.TrimSpace(searchCellVal)
+			if searchCellVal == "" {
 				break
 			}
 
+			// 按空格分割单元格内容，得到片段数组
+			tokens := strings.Fields(searchCellVal)
+
+			// 读取整行全部单元格
 			var line []string
 			oc := 1
 			for {
@@ -117,18 +180,27 @@ func main() {
 			line = append(line, "来源:"+baseName)
 			line = append(line, fmt.Sprintf("来源行号:%d", or))
 
-			lookupMap[cellVal] = append(lookupMap[cellVal], Record{
-				Data:      line,
-				Src:       baseName,
-				SourceRow: or,
-			})
+			// 将每一个空格分割片段作为检索key存入map
+			for _, tk := range tokens {
+				tkTrim := strings.TrimSpace(tk)
+				if tkTrim == "" {
+					continue
+				}
+				lookupMap[tkTrim] = append(lookupMap[tkTrim], Record{
+					Data:      line,
+					Src:       baseName,
+					SourceRow: or,
+				})
+			}
 			or++
 		}
 		fOther.Close()
 	}
-	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词\n", len(lookupMap))
+	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个检索关键词\n", len(lookupMap))
+	fmt.Printf("⚠️ 表头缺失标记的文档数量：%d\n", len(missingHeaderDocs))
 
-	fmt.Println("\n📋 读取待查找列表...")
+	// ========= 读取待查找A列待检索关键词（跳过A1表头） =========
+	fmt.Println("\n📋 读取待查找列表（跳过A1表头）...")
 	fTarget, err := excelize.OpenFile(targetPath)
 	if err != nil {
 		fmt.Println("打开待查找.xlsx失败:", err)
@@ -146,8 +218,7 @@ func main() {
 	sheetName := sheets[0]
 
 	var keyList []KeyItem
-	readRow := 1
-	// 新增：对待查找表A列关键词去重，记录已经处理过的key
+	readRow := 2 // A1是表头标记，从第2行读取待检索关键词
 	seenTargetKey := make(map[string]bool)
 	skipCount := 0
 
@@ -161,7 +232,6 @@ func main() {
 			break
 		}
 
-		// 如果待查找表已经出现过这个关键词，直接跳过
 		if seenTargetKey[key] {
 			fmt.Printf("⚠️ 待查找表A列检测到重复关键词【%s】，跳过该行\n", key)
 			skipCount++
@@ -178,8 +248,9 @@ func main() {
 		})
 		readRow++
 	}
-	fmt.Printf("✅ 原始读取：%d行，跳过待查找表重复关键词：%d行，实际处理关键词：%d个\n", readRow-1, skipCount, len(keyList))
+	fmt.Printf("✅ 原始读取：%d行，跳过待查找表重复关键词：%d行，实际处理关键词：%d个\n", readRow-2, skipCount, len(keyList))
 
+	// 清空工作表，开始输出结果
 	_ = fTarget.SetSheetRow(sheetName, "A1", nil)
 	maxRow := 1
 	matchCount := 0
@@ -215,6 +286,15 @@ func main() {
 		}
 	}
 
+	// ========= 输出：表头没有A1标记的文档清单 =========
+	fmt.Println("\n📋 输出表头缺失标记的文档清单...")
+	_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), "下面是文档表头没有A1单元格数据的文档")
+	maxRow++
+	for _, docName := range missingHeaderDocs {
+		_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), docName)
+		maxRow++
+	}
+
 	err = fTarget.Save()
 	if err != nil {
 		fmt.Println("保存待查找.xlsx失败:", err)
@@ -222,7 +302,8 @@ func main() {
 		return
 	}
 
-	fmt.Printf("\n🎉 处理完毕！\n✅ 匹配总行数：%d\n❌ 无匹配条目：%d\n", matchCount, noMatchCount)
+	fmt.Printf("\n🎉 处理完毕！\n✅ 匹配总行数：%d\n❌ 无匹配条目：%d\n缺失表头文档数量：%d\n",
+		matchCount, noMatchCount, len(missingHeaderDocs))
 	waitEnter()
 }
 
