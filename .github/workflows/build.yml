@@ -3,7 +3,7 @@ name: Build Windows EXE
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # 支持手动点按钮编译
+  workflow_dispatch: # 支持手动触发编译
 
 jobs:
   build:
@@ -18,8 +18,10 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Tidy & download dependencies
+        run: |
+          go mod tidy
+          go mod download
 
       - name: Build exe (strip symbol)
         run: go build -ldflags="-s -w" -o xlsx_search.exe main.go
