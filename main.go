@@ -21,14 +21,14 @@ type KeyItem struct {
 	Records []Record
 }
 
-// dedupRecords 按【来源文件名+来源行号】去重
+// dedupRecords 外部匹配记录去重：来源文件+行号
 func dedupRecords(recs []Record) []Record {
 	seen := make(map[string]bool)
 	var out []Record
 	for _, r := range recs {
 		k := fmt.Sprintf("%s|%d", r.Src, r.SourceRow)
 		if seen[k] {
-			fmt.Printf("      ⚠️  去重跳过重复记录：%s,行%d\n", r.Src, r.SourceRow)
+			fmt.Printf("      ⚠️  去重跳过重复外部记录：%s,行%d\n", r.Src, r.SourceRow)
 			continue
 		}
 		seen[k] = true
@@ -147,6 +147,10 @@ func main() {
 
 	var keyList []KeyItem
 	readRow := 1
+	// 新增：对待查找表A列关键词去重，记录已经处理过的key
+	seenTargetKey := make(map[string]bool)
+	skipCount := 0
+
 	for {
 		key, err := fTarget.GetCellValue(sheetName, fmt.Sprintf("A%d", readRow))
 		if err != nil {
@@ -156,8 +160,17 @@ func main() {
 		if key == "" {
 			break
 		}
+
+		// 如果待查找表已经出现过这个关键词，直接跳过
+		if seenTargetKey[key] {
+			fmt.Printf("⚠️ 待查找表A列检测到重复关键词【%s】，跳过该行\n", key)
+			skipCount++
+			readRow++
+			continue
+		}
+		seenTargetKey[key] = true
+
 		recs := lookupMap[key]
-		// 关键：在这里对当前关键词的记录做去重
 		recs = dedupRecords(recs)
 		keyList = append(keyList, KeyItem{
 			Key:     key,
@@ -165,7 +178,7 @@ func main() {
 		})
 		readRow++
 	}
-	fmt.Printf("✅ 读取到 %d 个待检索关键词\n", len(keyList))
+	fmt.Printf("✅ 原始读取：%d行，跳过待查找表重复关键词：%d行，实际处理关键词：%d个\n", readRow-1, skipCount, len(keyList))
 
 	_ = fTarget.SetSheetRow(sheetName, "A1", nil)
 	maxRow := 1
