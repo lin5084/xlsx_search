@@ -41,7 +41,7 @@ func main() {
 	if len(otherFiles) == 0 {
 		fmt.Println("警告：目录里没有其他xlsx文件用来检索")
 	} else {
-		fmt.Printf("找到待检索文件数量：%d\n", len(otherFiles))
+		fmt.Printf("✅ 一共找到 %d 个待检索文档\n", len(otherFiles))
 	}
 
 	fTarget, err := excelize.OpenFile(targetPath)
@@ -71,11 +71,16 @@ func main() {
 			break
 		}
 
+		fmt.Printf("\n👉 正在检索关键词【%s】，行号：%d\n", key, row)
+
 		var foundLines [][]string
 		for _, of := range otherFiles {
+			baseName := filepath.Base(of)
+			fmt.Printf("   正在读取文档：%s\n", baseName)
+
 			fOther, err := excelize.OpenFile(of)
 			if err != nil {
-				fmt.Printf("跳过文件 %s，打开失败：%v\n", of, err)
+				fmt.Printf("   ⚠️ 跳过文件 %s，打开失败：%v\n", of, err)
 				continue
 			}
 			osheets := fOther.GetSheetList()
@@ -102,13 +107,15 @@ func main() {
 						}
 						v, _ := fOther.GetCellValue(osheet, colName+fmt.Sprintf("%d", or))
 						line = append(line, v)
-						// 连续两个空就停止读这一行
 						if oc >= 2 && line[oc-1] == "" && line[oc-2] == "" {
 							break
 						}
 						oc++
 					}
+					// ✅ 在本行末尾追加来源文档名称
+					line = append(line, "来源:"+baseName)
 					foundLines = append(foundLines, line)
+					fmt.Printf("      ✅ 在 %s 找到匹配行！\n", baseName)
 				}
 				or++
 			}
@@ -130,6 +137,7 @@ func main() {
 			}
 		} else {
 			_ = fTarget.SetCellValue(sheetName, "B"+fmt.Sprintf("%d", row), "不存在")
+			fmt.Printf("   ❌ 全部文档都没有找到【%s】\n", key)
 		}
 		row++
 	}
@@ -141,7 +149,7 @@ func main() {
 		return
 	}
 
-	fmt.Println("✅ 全部处理完成！")
+	fmt.Println("\n🎉 全部处理完成！已保存到【待查找.xlsx】")
 	waitEnter()
 }
 
