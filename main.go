@@ -21,6 +21,22 @@ type KeyItem struct {
 	Records []Record
 }
 
+// dedupRecords 按【来源文件名+来源行号】去重
+func dedupRecords(recs []Record) []Record {
+	seen := make(map[string]bool)
+	var out []Record
+	for _, r := range recs {
+		k := fmt.Sprintf("%s|%d", r.Src, r.SourceRow)
+		if seen[k] {
+			fmt.Printf("      ⚠️  去重跳过重复记录：%s,行%d\n", r.Src, r.SourceRow)
+			continue
+		}
+		seen[k] = true
+		out = append(out, r)
+	}
+	return out
+}
+
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -56,8 +72,6 @@ func main() {
 	}
 
 	lookupMap := make(map[string][]Record)
-	// 去重标记：key = 来源文件名 + 行号
-	seen := make(map[string]bool)
 
 	for _, of := range otherFiles {
 		baseName := filepath.Base(of)
@@ -86,15 +100,6 @@ func main() {
 				break
 			}
 
-			// 构造唯一标识：文件名|行号
-			uniqueKey := fmt.Sprintf("%s|%d", baseName, or)
-			if seen[uniqueKey] {
-				// 已经收录过，跳过
-				or++
-				continue
-			}
-			seen[uniqueKey] = true
-
 			var line []string
 			oc := 1
 			for {
@@ -121,7 +126,7 @@ func main() {
 		}
 		fOther.Close()
 	}
-	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词，已过滤重复行\n", len(lookupMap))
+	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词\n", len(lookupMap))
 
 	fmt.Println("\n📋 读取待查找列表...")
 	fTarget, err := excelize.OpenFile(targetPath)
@@ -152,6 +157,8 @@ func main() {
 			break
 		}
 		recs := lookupMap[key]
+		// 关键：在这里对当前关键词的记录做去重
+		recs = dedupRecords(recs)
 		keyList = append(keyList, KeyItem{
 			Key:     key,
 			Records: recs,
