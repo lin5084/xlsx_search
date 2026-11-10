@@ -9,6 +9,18 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// Record 一条匹配记录：行数据 + 来源文件名
+type Record struct {
+	Data []string
+	Src  string
+}
+
+// KeyItem 待检索的关键词和它的匹配结果
+type KeyItem struct {
+	Key     string
+	Records []Record
+}
+
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -25,7 +37,7 @@ func main() {
 		return
 	}
 
-	// 收集目录下其他xlsx
+	// 收集其他xlsx
 	var otherFiles []string
 	entries, err := filepath.Glob(filepath.Join(cwd, "*.xlsx"))
 	if err != nil {
@@ -41,9 +53,65 @@ func main() {
 	if len(otherFiles) == 0 {
 		fmt.Println("警告：目录里没有其他xlsx文件用来检索")
 	} else {
-		fmt.Printf("✅ 一共找到 %d 个待检索文档\n", len(otherFiles))
+		fmt.Printf("✅ 一共找到 %d 个待检索文档，开始预加载...\n", len(otherFiles))
 	}
 
+	// ========== 预加载所有参考文档到内存map ==========
+	lookupMap := make(map[string][]Record)
+	for _, of := range otherFiles {
+		baseName := filepath.Base(of)
+		fmt.Printf("📖 正在加载文档：%s\n", baseName)
+
+		fOther, err := excelize.OpenFile(of)
+		if err != nil {
+			fmt.Printf("⚠️ 跳过文件 %s，打开失败：%v\n", baseName, err)
+			continue
+		}
+		osheets := fOther.GetSheetList()
+		if len(osheets) == 0 {
+			fOther.Close()
+			continue
+		}
+		osheet := osheets[0]
+
+		or := 1
+		for {
+			cellVal, err := fOther.GetCellValue(osheet, fmt.Sprintf("A%d", or))
+			if err != nil {
+				break
+			}
+			cellVal = strings.TrimSpace(cellVal)
+			if cellVal == "" {
+				break
+			}
+
+			var line []string
+			oc := 1
+			for {
+				colName, err := excelize.ColumnNumberToName(oc)
+				if err != nil {
+					break
+				}
+				v, _ := fOther.GetCellValue(osheet, colName+fmt.Sprintf("%d", or))
+				line = append(line, v)
+				if oc >= 2 && line[oc-1] == "" && line[oc-2] == "" {
+					break
+				}
+				oc++
+			}
+			line = append(line, "来源:"+baseName)
+			lookupMap[cellVal] = append(lookupMap[cellVal], Record{
+				Data: line,
+				Src:  baseName,
+			})
+			or++
+		}
+		fOther.Close()
+	}
+	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词\n", len(lookupMap))
+
+	// ========== 读取待查找表全部关键词，保存顺序 ==========
+	fmt.Println("\n📋 读取待查找列表...")
 	fTarget, err := excelize.OpenFile(targetPath)
 	if err != nil {
 		fmt.Println("打开待查找.xlsx失败:", err)
@@ -60,9 +128,10 @@ func main() {
 	}
 	sheetName := sheets[0]
 
-	row := 1
+	var keyList []KeyItem
+	readRow := 1
 	for {
-		key, err := fTarget.GetCellValue(sheetName, fmt.Sprintf("A%d", row))
+		key, err := fTarget.GetCellValue(sheetName, fmt.Sprintf("A%d", readRow))
 		if err != nil {
 			break
 		}
@@ -70,76 +139,51 @@ func main() {
 		if key == "" {
 			break
 		}
+		recs := lookupMap[key]
+		keyList = append(keyList, KeyItem{
+			Key:     key,
+			Records: recs,
+		})
+		readRow++
+	}
+	fmt.Printf("✅ 读取到 %d 个待检索关键词\n", len(keyList))
 
-		fmt.Printf("\n👉 正在检索关键词【%s】，行号：%d\n", key, row)
+	// ========== 清空工作表，重新写入（按新规则：一条匹配一行） ==========
+	// 清除原有所有数据
+	_ = fTarget.SetSheetRow(sheetName, "A1", nil)
+	maxRow := 1
+	matchCount := 0
+	noMatchCount := 0
 
-		var foundLines [][]string
-		for _, of := range otherFiles {
-			baseName := filepath.Base(of)
-			fmt.Printf("   正在读取文档：%s\n", baseName)
-
-			fOther, err := excelize.OpenFile(of)
-			if err != nil {
-				fmt.Printf("   ⚠️ 跳过文件 %s，打开失败：%v\n", of, err)
-				continue
-			}
-			osheets := fOther.GetSheetList()
-			if len(osheets) == 0 {
-				fOther.Close()
-				continue
-			}
-			osheet := osheets[0]
-
-			or := 1
-			for {
-				cellVal, _ := fOther.GetCellValue(osheet, fmt.Sprintf("A%d", or))
-				cellVal = strings.TrimSpace(cellVal)
-				if cellVal == "" {
-					break
-				}
-				if cellVal == key {
-					var line []string
-					oc := 1
-					for {
-						colName, err := excelize.ColumnNumberToName(oc)
-						if err != nil {
-							break
-						}
-						v, _ := fOther.GetCellValue(osheet, colName+fmt.Sprintf("%d", or))
-						line = append(line, v)
-						if oc >= 2 && line[oc-1] == "" && line[oc-2] == "" {
-							break
-						}
-						oc++
-					}
-					// ✅ 在本行末尾追加来源文档名称
-					line = append(line, "来源:"+baseName)
-					foundLines = append(foundLines, line)
-					fmt.Printf("      ✅ 在 %s 找到匹配行！\n", baseName)
-				}
-				or++
-			}
-			fOther.Close()
+	fmt.Println("\n===== 开始生成结果 =====")
+	for _, item := range keyList {
+		key := item.Key
+		recs := item.Records
+		if len(recs) == 0 {
+			// 无匹配：一行，A=key，B=不存在
+			fmt.Printf("🔍 关键词【%s】 → ❌ 不存在\n", key)
+			_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), key)
+			_ = fTarget.SetCellValue(sheetName, "B"+fmt.Sprintf("%d", maxRow), "不存在")
+			maxRow++
+			noMatchCount++
+			continue
 		}
-
-		if len(foundLines) > 0 {
-			col := 2
-			for _, line := range foundLines {
-				for ci, val := range line {
-					colName, err := excelize.ColumnNumberToName(col + ci)
-					if err != nil {
-						continue
-					}
-					cellName := colName + fmt.Sprintf("%d", row)
-					_ = fTarget.SetCellValue(sheetName, cellName, val)
+		// 多条匹配，循环每一条，单独占一行
+		fmt.Printf("🔍 关键词【%s】 → ✅ 找到 %d 条\n", key, len(recs))
+		for _, rec := range recs {
+			_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), key)
+			for ci, val := range rec.Data {
+				colIdx := 2 + ci
+				colName, err := excelize.ColumnNumberToName(colIdx)
+				if err != nil {
+					continue
 				}
-				col += len(line)
+				cell := colName + fmt.Sprintf("%d", maxRow)
+				_ = fTarget.SetCellValue(sheetName, cell, val)
 			}
-		} else {
-			_ = fTarget.SetCellValue(sheetName, "B"+fmt.Sprintf("%d", row), "不存在")
-			fmt.Printf("   ❌ 全部文档都没有找到【%s】\n", key)
+			maxRow++
+			matchCount++
 		}
-		row++
 	}
 
 	err = fTarget.Save()
@@ -149,7 +193,7 @@ func main() {
 		return
 	}
 
-	fmt.Println("\n🎉 全部处理完成！已保存到【待查找.xlsx】")
+	fmt.Printf("\n🎉 处理完毕！\n✅ 匹配总行数：%d\n❌ 无匹配条目：%d\n", matchCount, noMatchCount)
 	waitEnter()
 }
 
