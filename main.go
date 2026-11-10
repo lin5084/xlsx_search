@@ -9,13 +9,13 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// Record 一条匹配记录：行数据 + 来源文件名
+// Record 增加 SourceRow 来源文档里的行号
 type Record struct {
-	Data []string
-	Src  string
+	Data      []string
+	Src       string
+	SourceRow int
 }
 
-// KeyItem 待检索的关键词和它的匹配结果
 type KeyItem struct {
 	Key     string
 	Records []Record
@@ -37,7 +37,6 @@ func main() {
 		return
 	}
 
-	// 收集其他xlsx
 	var otherFiles []string
 	entries, err := filepath.Glob(filepath.Join(cwd, "*.xlsx"))
 	if err != nil {
@@ -56,7 +55,6 @@ func main() {
 		fmt.Printf("✅ 一共找到 %d 个待检索文档，开始预加载...\n", len(otherFiles))
 	}
 
-	// ========== 预加载所有参考文档到内存map ==========
 	lookupMap := make(map[string][]Record)
 	for _, of := range otherFiles {
 		baseName := filepath.Base(of)
@@ -99,10 +97,14 @@ func main() {
 				}
 				oc++
 			}
+			// 先追加来源文件名，再追加来源行号
 			line = append(line, "来源:"+baseName)
+			line = append(line, fmt.Sprintf("来源行号:%d", or))
+
 			lookupMap[cellVal] = append(lookupMap[cellVal], Record{
-				Data: line,
-				Src:  baseName,
+				Data:      line,
+				Src:       baseName,
+				SourceRow: or,
 			})
 			or++
 		}
@@ -110,7 +112,6 @@ func main() {
 	}
 	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词\n", len(lookupMap))
 
-	// ========== 读取待查找表全部关键词，保存顺序 ==========
 	fmt.Println("\n📋 读取待查找列表...")
 	fTarget, err := excelize.OpenFile(targetPath)
 	if err != nil {
@@ -148,8 +149,6 @@ func main() {
 	}
 	fmt.Printf("✅ 读取到 %d 个待检索关键词\n", len(keyList))
 
-	// ========== 清空工作表，重新写入（按新规则：一条匹配一行） ==========
-	// 清除原有所有数据
 	_ = fTarget.SetSheetRow(sheetName, "A1", nil)
 	maxRow := 1
 	matchCount := 0
@@ -160,7 +159,6 @@ func main() {
 		key := item.Key
 		recs := item.Records
 		if len(recs) == 0 {
-			// 无匹配：一行，A=key，B=不存在
 			fmt.Printf("🔍 关键词【%s】 → ❌ 不存在\n", key)
 			_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), key)
 			_ = fTarget.SetCellValue(sheetName, "B"+fmt.Sprintf("%d", maxRow), "不存在")
@@ -168,9 +166,9 @@ func main() {
 			noMatchCount++
 			continue
 		}
-		// 多条匹配，循环每一条，单独占一行
 		fmt.Printf("🔍 关键词【%s】 → ✅ 找到 %d 条\n", key, len(recs))
 		for _, rec := range recs {
+			fmt.Printf("      ▶ 来源：%s，来源行号：%d\n", rec.Src, rec.SourceRow)
 			_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), key)
 			for ci, val := range rec.Data {
 				colIdx := 2 + ci
