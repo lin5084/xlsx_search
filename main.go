@@ -120,7 +120,11 @@ func main() {
 		targetSearchCol := -1
 		colScan := 1
 		for {
-			cellH, err := fOther.GetCellValue(osheet, excelize.ColumnNumberToName(colScan)+"1")
+			colHName, err := excelize.ColumnNumberToName(colScan)
+			if err != nil {
+				break
+			}
+			cellH, err := fOther.GetCellValue(osheet, colHName+"1")
 			if err != nil {
 				break
 			}
@@ -131,7 +135,11 @@ func main() {
 			}
 			// 表头连续两个空，停止扫描表头行
 			if colScan >=2 {
-				prevVal,_ := fOther.GetCellValue(osheet,excelize.ColumnNumberToName(colScan-1)+"1")
+				prevColName, err := excelize.ColumnNumberToName(colScan - 1)
+				if err != nil {
+					break
+				}
+				prevVal,_ := fOther.GetCellValue(osheet, prevColName+"1")
 				if strings.TrimSpace(cellH)=="" && strings.TrimSpace(prevVal)=="" {
 					break
 				}
@@ -150,7 +158,11 @@ func main() {
 		// 遍历数据行（从第2行开始，跳过表头）
 		or := 2
 		for {
-			searchCellVal, err := fOther.GetCellValue(osheet, excelize.ColumnNumberToName(targetSearchCol)+fmt.Sprintf("%d", or))
+			searchColName, err := excelize.ColumnNumberToName(targetSearchCol)
+			if err != nil {
+				break
+			}
+			searchCellVal, err := fOther.GetCellValue(osheet, searchColName+fmt.Sprintf("%d", or))
 			if err != nil {
 				break
 			}
