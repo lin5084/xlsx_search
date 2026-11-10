@@ -9,7 +9,7 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// Record 增加 SourceRow 来源文档里的行号
+// Record 来源记录
 type Record struct {
 	Data      []string
 	Src       string
@@ -56,6 +56,9 @@ func main() {
 	}
 
 	lookupMap := make(map[string][]Record)
+	// 去重标记：key = 来源文件名 + 行号
+	seen := make(map[string]bool)
+
 	for _, of := range otherFiles {
 		baseName := filepath.Base(of)
 		fmt.Printf("📖 正在加载文档：%s\n", baseName)
@@ -83,6 +86,15 @@ func main() {
 				break
 			}
 
+			// 构造唯一标识：文件名|行号
+			uniqueKey := fmt.Sprintf("%s|%d", baseName, or)
+			if seen[uniqueKey] {
+				// 已经收录过，跳过
+				or++
+				continue
+			}
+			seen[uniqueKey] = true
+
 			var line []string
 			oc := 1
 			for {
@@ -97,7 +109,6 @@ func main() {
 				}
 				oc++
 			}
-			// 先追加来源文件名，再追加来源行号
 			line = append(line, "来源:"+baseName)
 			line = append(line, fmt.Sprintf("来源行号:%d", or))
 
@@ -110,7 +121,7 @@ func main() {
 		}
 		fOther.Close()
 	}
-	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词\n", len(lookupMap))
+	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个唯一关键词，已过滤重复行\n", len(lookupMap))
 
 	fmt.Println("\n📋 读取待查找列表...")
 	fTarget, err := excelize.OpenFile(targetPath)
