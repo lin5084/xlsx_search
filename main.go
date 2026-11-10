@@ -96,7 +96,10 @@ func main() {
 					var line []string
 					oc := 1
 					for {
-						colName := excelize.ColumnNumberToName(oc)
+						colName, err := excelize.ColumnNumberToName(oc)
+						if err != nil {
+							break
+						}
 						v, _ := fOther.GetCellValue(osheet, colName+fmt.Sprintf("%d", or))
 						line = append(line, v)
 						// 连续两个空就停止读这一行
@@ -116,7 +119,11 @@ func main() {
 			col := 2
 			for _, line := range foundLines {
 				for ci, val := range line {
-					cellName := excelize.ColumnNumberToName(col+ci) + fmt.Sprintf("%d", row)
+					colName, err := excelize.ColumnNumberToName(col + ci)
+					if err != nil {
+						continue
+					}
+					cellName := colName + fmt.Sprintf("%d", row)
 					_ = fTarget.SetCellValue(sheetName, cellName, val)
 				}
 				col += len(line)
