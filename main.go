@@ -134,13 +134,13 @@ func main() {
 				break
 			}
 			// 表头连续两个空，停止扫描表头行
-			if colScan >=2 {
+			if colScan >= 2 {
 				prevColName, err := excelize.ColumnNumberToName(colScan - 1)
 				if err != nil {
 					break
 				}
-				prevVal,_ := fOther.GetCellValue(osheet, prevColName+"1")
-				if strings.TrimSpace(cellH)=="" && strings.TrimSpace(prevVal)=="" {
+				prevVal, _ := fOther.GetCellValue(osheet, prevColName+"1")
+				if strings.TrimSpace(cellH) == "" && strings.TrimSpace(prevVal) == "" {
 					break
 				}
 			}
@@ -211,7 +211,7 @@ func main() {
 	fmt.Printf("✅ 所有文档加载完成，一共缓存 %d 个检索关键词\n", len(lookupMap))
 	fmt.Printf("⚠️ 表头缺失标记的文档数量：%d\n", len(missingHeaderDocs))
 
-	// ========= 读取待查找A列待检索关键词（跳过A1表头） =========
+	// ========= 读取待查找A列待检索关键词（跳过A1表头，从第2行读取） =========
 	fmt.Println("\n📋 读取待查找列表（跳过A1表头）...")
 	fTarget, err := excelize.OpenFile(targetPath)
 	if err != nil {
@@ -262,9 +262,8 @@ func main() {
 	}
 	fmt.Printf("✅ 原始读取：%d行，跳过待查找表重复关键词：%d行，实际处理关键词：%d个\n", readRow-2, skipCount, len(keyList))
 
-	// 清空工作表，开始输出结果
-	_ = fTarget.SetSheetRow(sheetName, "A1", nil)
-	maxRow := 1
+	// 【重要修改】不再清空A1！输出结果从第2行开始，maxRow初始值=2
+	maxRow := 2
 	matchCount := 0
 	noMatchCount := 0
 
@@ -298,7 +297,7 @@ func main() {
 		}
 	}
 
-	// ========= 输出：表头没有A1标记的文档清单 =========
+	// ========= 输出：表头没有A1标记的文档清单，接续在后面 =========
 	fmt.Println("\n📋 输出表头缺失标记的文档清单...")
 	_ = fTarget.SetCellValue(sheetName, "A"+fmt.Sprintf("%d", maxRow), "下面是文档表头没有A1单元格数据的文档")
 	maxRow++
